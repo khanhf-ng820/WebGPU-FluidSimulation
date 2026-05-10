@@ -74,23 +74,36 @@ async function main() {
     // Cell State Grid Settings (For Simulation)
     // =========================================================
 
-    // Create an array representing the active state of each cell.
+    // Create an array representing the active state of each cell
     const cellStateArray = new Uint32Array(GRID_WIDTH * GRID_HEIGHT);
 
-    // Create a storage buffer to hold the cell state.
-    const cellStateStorage = device.createBuffer({
-        label: "Cell State Grid",
-        size: cellStateArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
+    // Create two Storage Buffers to hold the cell state
+    const cellStateStorage = [
+        device.createBuffer({
+            label: "Cell State A",
+            size: cellStateArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+        device.createBuffer({
+            label: "Cell State B",
+            size: cellStateArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+    ];
 
-    // Initialization: Mark every third cell of the grid as active.
-    for (let i = 0; i < cellStateArray.length; i += 3) {
+    // Initialization: Mark every third cell of the first grid as active.
+    for (let i = 0; i < cellStateArray.length; i+=3) {
         cellStateArray[i] = 1;
     }
-
     // Write to Storage Buffer
-    device.queue.writeBuffer(cellStateStorage, 0, cellStateArray);
+    device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+
+    // Initialization: Mark every other cell of the second grid as active.
+    for (let i = 0; i < cellStateArray.length; i++) {
+        cellStateArray[i] = i % 2;
+    }
+    // Write to Storage Buffer
+    device.queue.writeBuffer(cellStateStorage[1], 0, cellStateArray);
 
     // =========================================================
     // GPU Texture
@@ -177,25 +190,54 @@ async function main() {
         },
     });
 
-    const bindGroup = device.createBindGroup({
-        label: "Cell renderer bind group",
-        layout: pipeline.getBindGroupLayout(0),
-
-        entries: [
-            {
-                binding: 0,
-                resource: { buffer: uniformBuffer },
-            },
-            {
-                binding: 1,
-                resource: texture.createView(),
-            },
-            {
-                binding: 2,
-                resource: sampler,
-            }
-        ]
-    });
+    const bindGroups = [
+        device.createBindGroup({
+            label: "Cell renderer bind group A",
+            layout: pipeline.getBindGroupLayout(0),
+    
+            entries: [
+                {
+                    binding: 0,
+                    resource: { buffer: uniformBuffer },
+                },
+                {
+                    binding: 1,
+                    resource: texture.createView(),
+                },
+                {
+                    binding: 2,
+                    resource: sampler,
+                },
+                {
+                    binding: 3,
+                    resource: { buffer: cellStateStorage[0] },
+                },
+            ]
+        }),
+        device.createBindGroup({
+            label: "Cell renderer bind group B",
+            layout: pipeline.getBindGroupLayout(0),
+    
+            entries: [
+                {
+                    binding: 0,
+                    resource: { buffer: uniformBuffer },
+                },
+                {
+                    binding: 1,
+                    resource: texture.createView(),
+                },
+                {
+                    binding: 2,
+                    resource: sampler,
+                },
+                {
+                    binding: 3,
+                    resource: { buffer: cellStateStorage[1] },
+                },
+            ]
+        }),
+    ];
 
     // =========================================================
     // Resize Handling
@@ -245,9 +287,15 @@ async function main() {
     // Render Loop
     // =========================================================
 
+    const UPDATE_INTERVAL = 200; // 200ms
+    let step = 0;
+    let pingPongIndex = 0;
+
     function frame() {
 
         // updatePixels();
+        step++;
+        pingPongIndex = 1 - pingPongIndex;
 
         const encoder = device.createCommandEncoder();
 
@@ -272,7 +320,7 @@ async function main() {
         });
 
         pass.setPipeline(pipeline);
-        pass.setBindGroup(0, bindGroup);
+        pass.setBindGroup(0, bindGroups[pingPongIndex]);
 
         // Draw fullscreen quad
         pass.draw(6, GRID_WIDTH * GRID_HEIGHT);
@@ -281,10 +329,12 @@ async function main() {
 
         device.queue.submit([encoder.finish()]);
 
-        requestAnimationFrame(frame);
+        // requestAnimationFrame(frame);
     }
 
-    requestAnimationFrame(frame);
+
+    // requestAnimationFrame(frame);
+    setInterval(frame, UPDATE_INTERVAL);
 }
 
 
