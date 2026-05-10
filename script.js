@@ -14,7 +14,7 @@ async function loadShader(url) {
 async function main() {
 
     // =========================================================
-    // WebGPU Setup
+    // WebGPU Boilerplate Setup
     // =========================================================
 
     if (!navigator.gpu) {
@@ -37,11 +37,20 @@ async function main() {
     });
 
     // =========================================================
-    // Pixel Grid Settings
+    // Pixel Grid Settings (For Fragment Shaders)
     // =========================================================
 
     const GRID_WIDTH = 128;
     const GRID_HEIGHT = 128;
+
+    // Create a uniform buffer that describes the grid
+    const uniformArray = new Float32Array([GRID_WIDTH, GRID_HEIGHT]);
+    const uniformBuffer = device.createBuffer({
+        label: "Grid Uniforms",
+        size: uniformArray.byteLength,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
 
     // RGBA per pixel
     // Uint8Array = 0-255 color values
@@ -60,6 +69,28 @@ async function main() {
             pixels[i + 3] = 255;        // A
         }
     }
+
+    // =========================================================
+    // Cell State Grid Settings (For Simulation)
+    // =========================================================
+
+    // Create an array representing the active state of each cell.
+    const cellStateArray = new Uint32Array(GRID_WIDTH * GRID_HEIGHT);
+
+    // Create a storage buffer to hold the cell state.
+    const cellStateStorage = device.createBuffer({
+        label: "Cell State Grid",
+        size: cellStateArray.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+
+    // Initialization: Mark every third cell of the grid as active.
+    for (let i = 0; i < cellStateArray.length; i += 3) {
+        cellStateArray[i] = 1;
+    }
+
+    // Write to Storage Buffer
+    device.queue.writeBuffer(cellStateStorage, 0, cellStateArray);
 
     // =========================================================
     // GPU Texture
@@ -99,10 +130,14 @@ async function main() {
     // Fullscreen Quad Shader
     // =========================================================
 
-    const shaderModuleCode = await loadShader("./shader_vert.wgsl");
+    const vertShaderModuleCode = await loadShader("./shader_vert.wgsl");
+    const fragShaderModuleCode = await loadShader("./shader_frag.wgsl");
 
-    const shaderModule = device.createShaderModule({
-        code: shaderModuleCode
+    const vertShaderModule = device.createShaderModule({
+        code: vertShaderModuleCode
+    });
+    const fragShaderModule = device.createShaderModule({
+        code: fragShaderModuleCode
     });
 
     // =========================================================
@@ -122,12 +157,12 @@ async function main() {
         layout: "auto",
 
         vertex: {
-            module: shaderModule,
+            module: vertShaderModule,
             entryPoint: "vsMain",
         },
 
         fragment: {
-            module: shaderModule,
+            module: fragShaderModule,
             entryPoint: "fsMain",
 
             targets: [
@@ -143,16 +178,20 @@ async function main() {
     });
 
     const bindGroup = device.createBindGroup({
+        label: "Cell renderer bind group",
         layout: pipeline.getBindGroupLayout(0),
 
         entries: [
             {
                 binding: 0,
-                resource: texture.createView(),
+                resource: { buffer: uniformBuffer },
             },
-
             {
                 binding: 1,
+                resource: texture.createView(),
+            },
+            {
+                binding: 2,
                 resource: sampler,
             }
         ]
@@ -208,7 +247,7 @@ async function main() {
 
     function frame() {
 
-        updatePixels();
+        // updatePixels();
 
         const encoder = device.createCommandEncoder();
 
@@ -236,7 +275,7 @@ async function main() {
         pass.setBindGroup(0, bindGroup);
 
         // Draw fullscreen quad
-        pass.draw(6);
+        pass.draw(6, GRID_WIDTH * GRID_HEIGHT);
 
         pass.end();
 
