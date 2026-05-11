@@ -91,14 +91,14 @@ async function main() {
         }),
     ];
 
-    // Initialization: Mark every third cell of the first grid as active.
+    // Initialization
     for (let i = 0; i < cellStateArray.length; i+=3) {
-        cellStateArray[i] = 1;
+        cellStateArray[i] = cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
     }
     // Write to Storage Buffer
     device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
 
-    // Initialization: Mark every other cell of the second grid as active.
+    // Initialization: Mark every other cell of the second grid as active
     for (let i = 0; i < cellStateArray.length; i++) {
         cellStateArray[i] = i % 2;
     }
@@ -140,17 +140,27 @@ async function main() {
     uploadPixels();
 
     // =========================================================
-    // Fullscreen Quad Shader
+    // Shader Modules
     // =========================================================
+
+    const WORKGROUP_SIZE = 8; // WORKGROUP_SIZE is also in Compute Shader code
 
     const vertShaderModuleCode = await loadShader("./shader_vert.wgsl");
     const fragShaderModuleCode = await loadShader("./shader_frag.wgsl");
+    let simShaderModuleCode = await loadShader("./shader_comp.wgsl");
+    simShaderModuleCode = simShaderModuleCode.replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
 
     const vertShaderModule = device.createShaderModule({
+        label: "Vertex shader",
         code: vertShaderModuleCode
     });
     const fragShaderModule = device.createShaderModule({
+        label: "Fragment shader",
         code: fragShaderModuleCode
+    });
+    const simShaderModule = device.createShaderModule({
+        label: "Game of Life simulation shader",
+        code: simShaderModuleCode
     });
 
     // =========================================================
@@ -166,8 +176,48 @@ async function main() {
     // Bind Group Layout
     // =========================================================
 
+    // Create the bind group layout and pipeline layout.
+    const bindGroupLayout = device.createBindGroupLayout({
+        label: "Bind Group Layout",
+        entries: [
+        {
+            binding: 0,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+            buffer: {} // Grid uniform buffer
+        },
+        {
+            binding: 1,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            texture: { sampleType: "float" }
+        },
+        {
+            binding: 2,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            sampler: {}
+        },
+        {
+            binding: 3,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+            buffer: { type: "read-only-storage" } // Cell state input buffer
+        },
+        {
+            binding: 4,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type: "storage" } // Cell state output buffer
+        },
+        ]
+    });
+
+
+
+    const pipelineLayout = device.createPipelineLayout({
+        label: "Cell Pipeline Layout",
+        bindGroupLayouts: [ bindGroupLayout ],
+    });
+
     const pipeline = device.createRenderPipeline({
-        layout: "auto",
+        label: "Vertex and Fragment Pipeline",
+        layout: pipelineLayout,
 
         vertex: {
             module: vertShaderModule,
@@ -189,6 +239,18 @@ async function main() {
             topology: "triangle-list",
         },
     });
+
+    // Create a compute pipeline that updates the game state.
+    const simulationPipeline = device.createComputePipeline({
+        label: "Simulation pipeline",
+        layout: pipelineLayout,
+        compute: {
+            module: simShaderModule,
+            entryPoint: "csMain",
+        }
+    });
+
+
 
     const bindGroups = [
         device.createBindGroup({
@@ -212,6 +274,10 @@ async function main() {
                     binding: 3,
                     resource: { buffer: cellStateStorage[0] },
                 },
+                {
+                    binding: 4,
+                    resource: { buffer: cellStateStorage[1] },
+                },
             ]
         }),
         device.createBindGroup({
@@ -234,6 +300,10 @@ async function main() {
                 {
                     binding: 3,
                     resource: { buffer: cellStateStorage[1] },
+                },
+                {
+                    binding: 4,
+                    resource: { buffer: cellStateStorage[0] },
                 },
             ]
         }),
@@ -292,17 +362,30 @@ async function main() {
     let pingPongIndex = 0;
 
     function frame() {
+        const encoder = device.createCommandEncoder();
+
+        // Compute pass
+        const simPass = encoder.beginComputePass();
+
+        simPass.setPipeline(simulationPipeline);
+        simPass.setBindGroup(0, bindGroups[pingPongIndex]);
+
+        const workgroupCount = Math.ceil(Math.sqrt(GRID_WIDTH * GRID_HEIGHT / WORKGROUP_SIZE / WORKGROUP_SIZE));
+        simPass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+        simPass.end();
+
 
         // updatePixels();
         step++;
         pingPongIndex = 1 - pingPongIndex;
 
-        const encoder = device.createCommandEncoder();
 
         const view = context
             .getCurrentTexture()
             .createView();
 
+        // Render pass
         const pass = encoder.beginRenderPass({
             colorAttachments: [
                 {
