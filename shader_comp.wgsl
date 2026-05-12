@@ -11,6 +11,10 @@
 
 
 
+fn positive_mod_i32(x: i32, y: i32) -> u32 {
+    return u32(((x % y) + y) % y);
+}
+
 fn cellIndex(cell_coor : vec2u) -> u32 {
     // Wrap-around
     return cell_coor.x % u32(grid.x) + (cell_coor.y % u32(grid.y)) * u32(grid.x);
@@ -18,11 +22,14 @@ fn cellIndex(cell_coor : vec2u) -> u32 {
 
 fn cellIndexi(cell_coor : vec2i) -> u32 {
     // Wrap-around (safer)
-    return u32(cell_coor.x % i32(grid.x) + (cell_coor.y % i32(grid.y)) * i32(grid.x));
+    return positive_mod_i32(cell_coor.x, i32(grid.x))
+         + positive_mod_i32(cell_coor.y, i32(grid.y)) * u32(grid.x);
 }
 
+
+
 // global_invocation_id: three-dimensional vector of where in the grid of shader invocations
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
 fn csMain(@builtin(global_invocation_id) cell : vec3<u32>) {
 
     let liveNeighbors = cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 1,  1))]
