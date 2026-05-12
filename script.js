@@ -63,10 +63,10 @@ async function main() {
             const i = (y * GRID_WIDTH + x) * 4;
 
             // Example pattern
-            pixels[i + 0] = x * 2;      // R
-            pixels[i + 1] = y * 2;      // G
-            pixels[i + 2] = 255;        // B
-            pixels[i + 3] = 255;        // A
+            pixels[i + 0] = x / GRID_WIDTH  * 255;  // R
+            pixels[i + 1] = y / GRID_HEIGHT * 255;  // G
+            pixels[i + 2] = 255;                    // B
+            pixels[i + 3] = 255;                    // A
         }
     }
 
@@ -357,7 +357,7 @@ async function main() {
     // Render Loop
     // =========================================================
 
-    const UPDATE_INTERVAL = 200; // 200ms
+    const UPDATE_INTERVAL = 50; // in ms
     let step = 0;
     let pingPongIndex = 0;
 
