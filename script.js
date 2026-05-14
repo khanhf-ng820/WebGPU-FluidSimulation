@@ -43,7 +43,7 @@ async function main() {
     const GRID_WIDTH = 128;
     const GRID_HEIGHT = 128;
 
-    // Create a uniform buffer that describes the grid
+    // Create a uniform buffer that describes the grid texture
     const uniformArray = new Float32Array([GRID_WIDTH, GRID_HEIGHT]);
     const uniformBuffer = device.createBuffer({
         label: "Grid Uniforms",
@@ -74,36 +74,134 @@ async function main() {
     // Cell State Grid Settings (For Simulation)
     // =========================================================
 
-    // Create an array representing the active state of each cell
-    const cellStateArray = new Uint32Array(GRID_WIDTH * GRID_HEIGHT);
+    // Instructions for setBounds
+    const SetBoundsType = Object.freeze({
+        SCALAR: 0,
+        VECTOR_X: 1,
+        VECTOR_Y: 2,
+    });
 
-    // Create two Storage Buffers to hold the cell state
-    const cellStateStorage = [
+    const densityFieldArray = new Uint32Array(GRID_WIDTH * GRID_HEIGHT);
+    // const densityFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+    const velocityFieldXArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT * 2);
+    const velocityFieldYArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT * 2);
+    const diffuseTempFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+    const tempFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+    const setBoundsType = new Uint32Array( [SetBoundsType.SCALAR] );
+
+    // Create two Storage Buffers to hold the density field
+    const densityFieldStorage = [
         device.createBuffer({
-            label: "Cell State A",
-            size: cellStateArray.byteLength,
+            label: "Density Field A",
+            size: densityFieldArray.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         }),
         device.createBuffer({
-            label: "Cell State B",
-            size: cellStateArray.byteLength,
+            label: "Density Field B",
+            size: densityFieldArray.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         }),
     ];
 
-    // Initialization
-    for (let i = 0; i < cellStateArray.length; i+=3) {
-        cellStateArray[i] = cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
-    }
-    // Write to Storage Buffer
-    device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+    const velocityFieldXStorage = [
+        device.createBuffer({
+            label: "Velocity Field X A",
+            size: velocityFieldXArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+        device.createBuffer({
+            label: "Velocity Field X B",
+            size: velocityFieldXArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+    ];
 
-    // Initialization: Mark every other cell of the second grid as active
-    for (let i = 0; i < cellStateArray.length; i++) {
-        cellStateArray[i] = i % 2;
+    const velocityFieldYStorage = [
+        device.createBuffer({
+            label: "Velocity Field Y A",
+            size: velocityFieldYArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+        device.createBuffer({
+            label: "Velocity Field Y B",
+            size: velocityFieldYArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+    ];
+
+    const diffuseTempFieldStorage = [
+        device.createBuffer({
+            label: "Diffuse Temp Field A",
+            size: diffuseTempFieldArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+        device.createBuffer({
+            label: "Diffuse Temp Field B",
+            size: diffuseTempFieldArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+    ];
+
+    const tempFieldStorage = [
+        device.createBuffer({
+            label: "General Temp Field A",
+            size: tempFieldArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+        device.createBuffer({
+            label: "General Temp Field B",
+            size: tempFieldArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        }),
+    ];
+
+    const setBoundsTypeStorage = device.createBuffer({
+        label: "Single setBounds Instruction",
+        size: setBoundsType.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+
+
+
+    // Initialization : Density field
+    for (let i = 0; i < densityFieldArray.length; i++) {
+        densityFieldArray[i] = Math.random() > 0.6 ? 1 : 0;
     }
     // Write to Storage Buffer
-    device.queue.writeBuffer(cellStateStorage[1], 0, cellStateArray);
+    device.queue.writeBuffer(densityFieldStorage[0], 0, densityFieldArray);
+    // Write to Storage Buffer
+    device.queue.writeBuffer(densityFieldStorage[1], 0, densityFieldArray);
+
+    // Initialization : Velocity field X Y
+    for (let i = 0; i < velocityFieldXArray.length; i++) {
+        velocityFieldXArray[i] = 0;
+    }
+    // Write to Storage Buffer
+    device.queue.writeBuffer(velocityFieldXStorage[0], 0, velocityFieldXArray);
+    device.queue.writeBuffer(velocityFieldXStorage[1], 0, velocityFieldXArray);
+    for (let i = 0; i < velocityFieldYArray.length; i++) {
+        velocityFieldYArray[i] = 0;
+    }
+    // Write to Storage Buffer
+    device.queue.writeBuffer(velocityFieldYStorage[0], 0, velocityFieldYArray);
+    device.queue.writeBuffer(velocityFieldYStorage[1], 0, velocityFieldYArray);
+
+    // Initialization : Diffuse temp field
+    // Write to Storage Buffer
+    device.queue.writeBuffer(diffuseTempFieldStorage[0], 0, diffuseTempFieldArray);
+    // Write to Storage Buffer
+    device.queue.writeBuffer(diffuseTempFieldStorage[1], 0, diffuseTempFieldArray);
+
+    // Initialization : Temp field
+    // Write to Storage Buffer
+    device.queue.writeBuffer(tempFieldStorage[0], 0, tempFieldArray);
+    // Write to Storage Buffer
+    device.queue.writeBuffer(tempFieldStorage[1], 0, tempFieldArray);
+
+    // Initialization : setBounds instruction
+    // Write to Storage Buffer
+    device.queue.writeBuffer(setBoundsTypeStorage, 0, setBoundsType);
+
 
     // =========================================================
     // GPU Texture
@@ -272,11 +370,11 @@ async function main() {
                 },
                 {
                     binding: 3,
-                    resource: { buffer: cellStateStorage[0] },
+                    resource: { buffer: densityFieldStorage[0] },
                 },
                 {
                     binding: 4,
-                    resource: { buffer: cellStateStorage[1] },
+                    resource: { buffer: densityFieldStorage[1] },
                 },
             ]
         }),
@@ -299,11 +397,11 @@ async function main() {
                 },
                 {
                     binding: 3,
-                    resource: { buffer: cellStateStorage[1] },
+                    resource: { buffer: densityFieldStorage[1] },
                 },
                 {
                     binding: 4,
-                    resource: { buffer: cellStateStorage[0] },
+                    resource: { buffer: densityFieldStorage[0] },
                 },
             ]
         }),
@@ -330,6 +428,7 @@ async function main() {
 
     let time = 0;
 
+    // Update texture
     function updatePixels() {
 
         time += 0.01;

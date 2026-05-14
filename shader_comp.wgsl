@@ -53,20 +53,20 @@ fn csMain(@builtin(global_invocation_id) cell : vec3<u32>) {
         }
     }
 
-    //let dims = textureDimensions(srcTex);
+    // let dims = textureDimensions(srcTex);
 
-    //if (gid.x >= dims.x || gid.y >= dims.y) {
-    //    return;
-    //}
+    // if (gid.x >= dims.x || gid.y >= dims.y) {
+    //     return;
+    // }
 
-    //let p = vec2<i32>(gid.xy);
+    // let p = vec2<i32>(gid.xy);
 
-    //let center = textureLoad(srcTex, p, 0);
+    // let center = textureLoad(srcTex, p, 0);
 
-    //let left  = textureLoad(srcTex, p + vec2(-1, 0), 0);
-    //let right = textureLoad(srcTex, p + vec2(1, 0), 0);
+    // let left  = textureLoad(srcTex, p + vec2(-1, 0), 0);
+    // let right = textureLoad(srcTex, p + vec2(1, 0), 0);
 
-    //let result = (center + left + right) / 3.0;
+    // let result = (center + left + right) / 3.0;
 
-    //textureStore(dstTex, p, result);
+    // textureStore(dstTex, p, result);
 }

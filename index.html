@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" href="data:;base64,iVBORw0KGgo=">
 
-<title>WebGPU Pixel Grid</title>
+<title>WebGPU Fluid Simulation</title>
 
 <style>
     html, body {
@@ -17,8 +17,9 @@
     }
 
     canvas {
-        width: 100vw;
+        /*width: 100vw;*/
         height: 100vh;
+        aspect-ratio: 1 / 1;
 
         /* Important for crisp pixels */
         image-rendering: pixelated;
