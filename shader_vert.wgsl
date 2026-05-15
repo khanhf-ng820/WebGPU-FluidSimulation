@@ -6,7 +6,7 @@ struct VertexOutput {
 
 @group(0) @binding(0) var<uniform> grid : vec2f;
 
-@group(0) @binding(3) var<storage> cellState : array<u32>;
+@group(0) @binding(5) var<storage> cellState : array<f32>;
 
 
 
@@ -45,6 +45,6 @@ fn vsMain(@builtin(vertex_index) vertexIndex : u32,
     out.uv = uvs[vertexIndex];
     out.cell_coor = cell;
 
-    let state = cellState[0];
+    // let state = cellState[0];
     return out;
 }

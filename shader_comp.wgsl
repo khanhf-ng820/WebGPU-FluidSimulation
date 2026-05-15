@@ -6,8 +6,8 @@
 
 @group(0) @binding(0) var<uniform> grid : vec2f;
 
-@group(0) @binding(3) var<storage> cellStateIn : array<u32>;
-@group(0) @binding(4) var<storage, read_write> cellStateOut: array<u32>;
+@group(0) @binding(5) var<storage> cellStateIn : array<f32>;
+@group(0) @binding(6) var<storage, read_write> cellStateOut: array<f32>;
 
 
 
@@ -32,25 +32,33 @@ fn cellIndexi(cell_coor : vec2i) -> u32 {
 @compute @workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
 fn csMain(@builtin(global_invocation_id) cell : vec3<u32>) {
 
-    let liveNeighbors = cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 1,  1))]
-                      + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 1,  0))]
-                      + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 1, -1))]
-                      + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i(-1,  1))]
-                      + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i(-1,  0))]
-                      + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i(-1, -1))]
-                      + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 0,  1))]
-                      + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 0, -1))];
+    let liveNeighbors : f32 = cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 1,  1))]
+                            + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 1,  0))]
+                            + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 1, -1))]
+                            + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i(-1,  1))]
+                            + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i(-1,  0))]
+                            + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i(-1, -1))]
+                            + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 0,  1))]
+                            + cellStateIn[cellIndexi(vec2i(cell.xy) - vec2i( 0, -1))];
 
-    switch liveNeighbors {
-        case 2: {
-            cellStateOut[cellIndex(cell.xy)] = cellStateIn[cellIndex(cell.xy)];
-        }
-        case 3: {
-            cellStateOut[cellIndex(cell.xy)] = 1;
-        }
-        default: {
-            cellStateOut[cellIndex(cell.xy)] = 0;
-        }
+    // switch liveNeighbors {
+    //     case 2.0: {
+    //         cellStateOut[cellIndex(cell.xy)] = cellStateIn[cellIndex(cell.xy)];
+    //     }
+    //     case 3.0: {
+    //         cellStateOut[cellIndex(cell.xy)] = 1.;
+    //     }
+    //     default: {
+    //         cellStateOut[cellIndex(cell.xy)] = 0.;
+    //     }
+    // }
+
+    if (liveNeighbors == 2.) {
+        cellStateOut[cellIndex(cell.xy)] = cellStateIn[cellIndex(cell.xy)];
+    } else if (liveNeighbors == 3.) {
+        cellStateOut[cellIndex(cell.xy)] = 1.;
+    } else {
+        cellStateOut[cellIndex(cell.xy)] = 0.;
     }
 
     // let dims = textureDimensions(srcTex);

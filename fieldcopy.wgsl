@@ -1,9 +1,9 @@
 @group(0) @binding(0) var<uniform> grid : vec2f;
-@group(0) @binding(1) var<uniform> dt : f32;
-@group(0) @binding(2) var<uniform> diff : f32; // diffusion rate
+@group(0) @binding(3) var<uniform> dt : f32;
+@group(0) @binding(4) var<uniform> diff : f32; // diffusion rate
 
-@group(0) @binding(3) var<storage> fieldSource : array<f32>;
-@group(0) @binding(4) var<storage, read_write> fieldDestination : array<f32>;
+@group(0) @binding(5) var<storage> fieldSource : array<f32>;
+@group(0) @binding(6) var<storage, read_write> fieldDestination : array<f32>;
 
 
 

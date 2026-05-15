@@ -6,7 +6,7 @@ var prevTex : texture_2d<f32>;
 @group(0) @binding(2)
 var prevSampler : sampler;
 
-@group(0) @binding(3) var<storage> cellState : array<u32>;
+@group(0) @binding(5) var<storage> cellState : array<f32>;
 
 struct VSOut {
     @builtin(position) position : vec4<f32>,
@@ -23,7 +23,8 @@ fn fsMain(in : VSOut) -> @location(0) vec4<f32> {
 
     // Example: no ping-pong rendering
     let sampledColor = textureSample(prevTex, prevSampler, in.cell_coor / grid.xy);
-    return select(vec4f(0.), sampledColor, cellState[cell_idx] > 0);
+    return sampledColor * clamp(cellState[cell_idx], 0., 1.);
+
 
 
     // Example: diffusion
