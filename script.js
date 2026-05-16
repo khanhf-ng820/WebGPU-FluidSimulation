@@ -112,9 +112,13 @@ const velocityFieldXArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
 const velocityFieldYArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
 const diffuseTempFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
 const tempFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+const divFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+const pressureFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+
 const setBoundsTypeScalar  = new Uint32Array( [SetBoundsType.SCALAR] );
 const setBoundsTypeVectorX = new Uint32Array( [SetBoundsType.VECTOR_X] );
 const setBoundsTypeVectorY = new Uint32Array( [SetBoundsType.VECTOR_Y] );
+
 
 // Create two Storage Buffers to hold the density field
 const densityFieldStorage = [
@@ -182,6 +186,25 @@ const tempFieldStorage = [
     }),
 ];
 
+const divFieldStorage = device.createBuffer({
+    label: "Divergence of Field",
+    size: divFieldArray.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+});
+
+const pressureFieldStorage = device.createBuffer({
+    label: "Pressure Field",
+    size: pressureFieldArray.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+});
+
+
+const placeholderStorage = Array.from( { length: 3 }, (_, i) => device.createBuffer({
+    label: "Placeholder Storage",
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+}));
+
 const setBoundsTypeScalarStorage = device.createBuffer({
     label: "Single setBounds Scalar Instruction",
     size: setBoundsTypeScalar.byteLength,
@@ -220,7 +243,7 @@ device.queue.writeBuffer(velocityFieldXStorage[0], 0, velocityFieldXArray);
 device.queue.writeBuffer(velocityFieldXStorage[1], 0, velocityFieldXArray);
 // Initialization : Velocity field Y
 for (let i = 0; i < velocityFieldYArray.length; i++) {
-    velocityFieldYArray[i] = (i > velocityFieldYArray.length/2 ? 1 : -1) * 3;
+    velocityFieldYArray[i] = (i > velocityFieldYArray.length/2 ? 1 : 1) * 3;
 }
 // Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldYStorage[0], 0, velocityFieldYArray);
@@ -237,6 +260,14 @@ device.queue.writeBuffer(diffuseTempFieldStorage[1], 0, diffuseTempFieldArray);
 device.queue.writeBuffer(tempFieldStorage[0], 0, tempFieldArray);
 // Write to Storage Buffer
 device.queue.writeBuffer(tempFieldStorage[1], 0, tempFieldArray);
+
+// Initialization : Divergence of field
+// Write to Storage Buffer
+device.queue.writeBuffer(divFieldStorage, 0, divFieldArray);
+
+// Initialization : Pressure field
+// Write to Storage Buffer
+device.queue.writeBuffer(pressureFieldStorage, 0, pressureFieldArray);
 
 // Initialization : setBounds instruction
 // Write to Storage Buffer
@@ -297,6 +328,12 @@ const setBoundsShaderModuleCode = (await loadShader("./setbounds.wgsl"))
     .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
 const diffuseGS_ShaderModuleCode = (await loadShader("./diffuse_gs_step.wgsl"))
     .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
+const calcDivShaderModuleCode = (await loadShader("./calculate_divergence.wgsl"))
+    .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
+const calcPressureGS_ShaderModuleCode = (await loadShader("./calculate_pressure_gs_step.wgsl"))
+    .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
+const projectShaderModuleCode = (await loadShader("./project_field.wgsl"))
+    .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
 
 const densityVertShaderModule = device.createShaderModule({
     label: "Density Grid Vertex shader",
@@ -330,6 +367,19 @@ const setBoundsShaderModule = device.createShaderModule({
 const diffuseGS_ShaderModule = device.createShaderModule({
     label: "Diffusion Gauss-Seidel Relaxation Step shader",
     code: diffuseGS_ShaderModuleCode
+});
+
+const calcDivShaderModule = device.createShaderModule({
+    label: "Calculate Divergence of Field shader",
+    code: calcDivShaderModuleCode
+});
+const calcPressureGS_ShaderModule = device.createShaderModule({
+    label: "Calculate Pressure Field with Gauss-Seidel Step shader",
+    code: calcPressureGS_ShaderModuleCode
+});
+const projectShaderModule = device.createShaderModule({
+    label: "Project Field (Removing Divergence) shader",
+    code: projectShaderModuleCode
 });
 
 // =========================================================
@@ -388,6 +438,11 @@ const bindGroupLayout = device.createBindGroupLayout({
         binding: 7,
         visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
         buffer: { type: "read-only-storage" } // Field input buffer
+    },
+    {
+        binding: 8,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: { type: "storage" }           // Field output buffer
     },
     ]
 });
@@ -538,6 +593,10 @@ const densityRenderBindGroups = Array.from({ length: 2 }, (_, i) => device.creat
             binding: 7,
             resource: { buffer: velocityFieldXStorage[1 - i] },
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[0] } // Placeholder
+        }
     ]
 }));
 
@@ -553,12 +612,16 @@ const velocityRenderBindGroups = Array.from({ length: 2 }, (_, i) => device.crea
         },
         {
             binding: 6,
-            resource: { buffer: densityFieldStorage[1 - i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
         {
             binding: 7,
             resource: { buffer: velocityFieldYStorage[i] },
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
@@ -585,6 +648,10 @@ const diffuseGSDensity_BindGroups = Array.from({ length: 2 }, (_, i) => device.c
             binding: 7,
             resource: { buffer: diffuseTempFieldStorage[i] },
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[0] } // Placeholder
+        }
     ]
 }));
 
@@ -604,8 +671,12 @@ const setBoundsDensityBindGroups = Array.from({ length: 2 }, (_, i) => device.cr
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
@@ -625,8 +696,12 @@ const fieldCopy_Temp_DiffuseTemp_BindGroups = Array.from({ length: 2 }, (_, i) =
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
@@ -646,8 +721,12 @@ const fieldCopy_DiffuseTemp_Density_BindGroups = Array.from({ length: 2 }, (_, i
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
@@ -671,6 +750,10 @@ const diffuseGSVelocityX_BindGroups = Array.from({ length: 2 }, (_, i) => device
             binding: 7,
             resource: { buffer: diffuseTempFieldStorage[i] },
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[0] } // Placeholder
+        }
     ]
 }));
 
@@ -690,8 +773,12 @@ const setBoundsVelocityXBindGroups = Array.from({ length: 2 }, (_, i) => device.
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
@@ -711,8 +798,12 @@ const fieldCopy_DiffuseTemp_VelocityX_BindGroups = Array.from({ length: 2 }, (_,
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
@@ -736,6 +827,10 @@ const diffuseGSVelocityY_BindGroups = Array.from({ length: 2 }, (_, i) => device
             binding: 7,
             resource: { buffer: diffuseTempFieldStorage[i] },
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[0] } // Placeholder
+        }
     ]
 }));
 
@@ -755,8 +850,12 @@ const setBoundsVelocityYBindGroups = Array.from({ length: 2 }, (_, i) => device.
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
@@ -776,8 +875,12 @@ const fieldCopy_DiffuseTemp_VelocityY_BindGroups = Array.from({ length: 2 }, (_,
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
         },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
     ]
 }));
 
