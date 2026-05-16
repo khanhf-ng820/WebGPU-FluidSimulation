@@ -17,19 +17,14 @@ fn vsMain(@builtin(vertex_index) vertexIndex : u32,
 
     let scalingFactor : f32 = 1.;
 
-    var positions = array<vec2<f32>, 2>(
+    let positions = array<vec2<f32>, 2>(
         vec2<f32>(0.0, 0.0),
         vec2<f32>(cellStateX[instance], cellStateY[instance]) * scalingFactor
     );
 
-    var uvs = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
+    let uvs = array<vec2<f32>, 2>(
         vec2<f32>(0.0, 0.0),
-
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 1.0),
-        vec2<f32>(1.0, 0.0)
+        vec2<f32>(1.0, 1.0)
     );
 
     var out : VertexOutput;
@@ -43,6 +38,5 @@ fn vsMain(@builtin(vertex_index) vertexIndex : u32,
     out.uv = uvs[vertexIndex];
     out.cell_coor = cell;
 
-    // let state = cellState[0];
     return out;
 }

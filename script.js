@@ -108,8 +108,8 @@ const SetBoundsType = Object.freeze({
 
 // const densityFieldArray = new Uint32Array(GRID_WIDTH * GRID_HEIGHT);
 const densityFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
-const velocityFieldXArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT * 2);
-const velocityFieldYArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT * 2);
+const velocityFieldXArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+const velocityFieldYArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
 const diffuseTempFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
 const tempFieldArray = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
 const setBoundsTypeScalar  = new Uint32Array( [SetBoundsType.SCALAR] );
@@ -213,13 +213,13 @@ device.queue.writeBuffer(densityFieldStorage[1], 0, densityFieldArray);
 
 // Initialization : Velocity field X Y
 for (let i = 0; i < velocityFieldXArray.length; i++) {
-    velocityFieldXArray[i] = 1;
+    velocityFieldXArray[i] = i > velocityFieldXArray.length/2 ? 1 : -1;
 }
 // Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldXStorage[0], 0, velocityFieldXArray);
 device.queue.writeBuffer(velocityFieldXStorage[1], 0, velocityFieldXArray);
 for (let i = 0; i < velocityFieldYArray.length; i++) {
-    velocityFieldYArray[i] = 1;
+    velocityFieldYArray[i] = i > velocityFieldYArray.length/2 ? 1 : 1;
 }
 // Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldYStorage[0], 0, velocityFieldYArray);
@@ -381,7 +381,7 @@ const bindGroupLayout = device.createBindGroupLayout({
     {
         binding: 6,
         visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "storage" } // Field output buffer
+        buffer: { type: "storage" }           // Field output buffer
     },
     {
         binding: 7,
@@ -426,7 +426,7 @@ const densityPipeline = device.createRenderPipeline({
 });
 
 const velocityPipeline = device.createRenderPipeline({
-    label: "Density Grid Vertex and Fragment Pipeline",
+    label: "Velocity Grid Vertex and Fragment Pipeline",
     layout: pipelineLayout,
 
     vertex: {
@@ -493,7 +493,7 @@ const diffuseGS_Pipeline = device.createComputePipeline({
 
 
 // =========================================================
-// Bind Groups
+// Bind Groups for Rendering
 // =========================================================
 
 const uniformBindings = [
@@ -565,8 +565,9 @@ const velocityRenderBindGroups = Array.from({ length: 2 }, (_, i) => device.crea
 // Bind Groups for Diffusion
 // =========================================================
 
+///// Density
 const diffuseGSDensity_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
-    label: "Diffusion Gauss-Seidel Relaxation Step Bind group " + i,
+    label: "Diffusion Gauss-Seidel Relaxation Step for Density Bind group " + i,
     layout: densityPipeline.getBindGroupLayout(0),
 
     entries: [
@@ -587,7 +588,7 @@ const diffuseGSDensity_BindGroups = Array.from({ length: 2 }, (_, i) => device.c
 }));
 
 const setBoundsDensityBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
-    label: "Diffusion Gauss-Seidel Relaxation Step Bind group " + i,
+    label: "Set Bounds Density Bind group " + i,
     layout: densityPipeline.getBindGroupLayout(0),
 
     entries: [
@@ -641,6 +642,71 @@ const fieldCopy_DiffuseTemp_Density_BindGroups = Array.from({ length: 2 }, (_, i
         {
             binding: 6,
             resource: { buffer: densityFieldStorage[1 - i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
+        },
+    ]
+}));
+
+
+///// Velocity X
+const diffuseGSVelocityX_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Diffusion Gauss-Seidel Relaxation Step for VelocityX Bind group " + i,
+    layout: velocityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: diffuseTempFieldStorage[i] },
+        },
+    ]
+}));
+
+const setBoundsVelocityXBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Set Bounds VelocityX Bind group " + i,
+    layout: velocityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: setBoundsTypeScalarStorage },
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: diffuseTempFieldStorage[i] }, // Does not matter
+        },
+    ]
+}));
+
+const fieldCopy_DiffuseTemp_VelocityX_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Copy DiffuseTempField to VelocityX Field Bind group " + i,
+    layout: velocityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: diffuseTempFieldStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: velocityFieldXStorage[1 - i] },
         },
         {
             binding: 7,
@@ -713,6 +779,7 @@ function simComputePass() {
     simPass.end();
 }
 
+///// Diffuse Density
 function diffuseGSDensity_ComputePass() {
     const diffuseGSDensity_Pass = encoder.beginComputePass();
 
@@ -757,6 +824,40 @@ function fieldCopy_DiffuseTemp_Density_ComputePass() {
     fieldCopy_DiffuseTemp_Density_Pass.end();
 }
 
+///// Diffuse VelocityX
+function diffuseGSVelocityX_ComputePass() {
+    const diffuseGSVelocityX_Pass = encoder.beginComputePass();
+
+    diffuseGSVelocityX_Pass.setPipeline(diffuseGS_Pipeline);
+    diffuseGSVelocityX_Pass.setBindGroup(0, diffuseGSVelocityX_BindGroups[pingPongIndex]);
+
+    diffuseGSVelocityX_Pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+    diffuseGSVelocityX_Pass.end();
+}
+
+function setBoundsVelocityX_ComputePass() {
+    const setBoundsVelocityX_Pass = encoder.beginComputePass();
+
+    setBoundsVelocityX_Pass.setPipeline(setBoundsPipeline);
+    setBoundsVelocityX_Pass.setBindGroup(0, setBoundsVelocityXBindGroups[pingPongIndex]);
+
+    setBoundsVelocityX_Pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+    setBoundsVelocityX_Pass.end();
+}
+
+function fieldCopy_DiffuseTemp_VelocityX_ComputePass() {
+    const fieldCopy_DiffuseTemp_VelocityX_Pass = encoder.beginComputePass();
+
+    fieldCopy_DiffuseTemp_VelocityX_Pass.setPipeline(fieldCopyPipeline);
+    fieldCopy_DiffuseTemp_VelocityX_Pass.setBindGroup(0, fieldCopy_DiffuseTemp_VelocityX_BindGroups[pingPongIndex]);
+
+    fieldCopy_DiffuseTemp_VelocityX_Pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+    fieldCopy_DiffuseTemp_VelocityX_Pass.end();
+}
+
 // =========================================================
 // Fluid Simulation Steps
 // =========================================================
@@ -768,7 +869,17 @@ function diffuseDensity() {
         fieldCopy_Temp_DiffuseTemp_ComputePass();
     }
     fieldCopy_DiffuseTemp_Density_ComputePass();
-    flipPingPongIndex();
+    pingPongIndex = 1 - pingPongIndex;
+}
+
+function diffuseVelocityX() {
+    for (let i = 0; i < GAUSS_SEIDEL; i++) {
+        diffuseGSVelocityX_ComputePass();
+        setBoundsVelocityX_ComputePass();
+        fieldCopy_Temp_DiffuseTemp_ComputePass();
+    }
+    fieldCopy_DiffuseTemp_VelocityX_ComputePass();
+    // pingPongIndex = 1 - pingPongIndex;
 }
 
 // =========================================================
@@ -779,7 +890,6 @@ const UPDATE_INTERVAL = 100; // in ms
 const workgroupCount = Math.ceil(Math.sqrt(GRID_WIDTH * GRID_HEIGHT / WORKGROUP_SIZE / WORKGROUP_SIZE));
 let step = 0;
 let pingPongIndex = 0;
-const flipPingPongIndex = () => {  pingPongIndex = 1 - pingPongIndex; };
 
 // Runs each frame
 function frame() {
@@ -788,14 +898,18 @@ function frame() {
     // Compute passes
     // for (let i = 0; i < GAUSS_SEIDEL; i++) {
     //     simComputePass();
-    //     flipPingPongIndex();
+    //     pingPongIndex = 1 - pingPongIndex;
     // }
+
+    diffuseVelocityX();
+
     diffuseDensity();
+
 
 
     // updateTexture();
     step++;
-    // flipPingPongIndex();
+    // pingPongIndex = 1 - pingPongIndex;
 
 
     const view = context
