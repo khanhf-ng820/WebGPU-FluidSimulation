@@ -213,13 +213,13 @@ device.queue.writeBuffer(densityFieldStorage[1], 0, densityFieldArray);
 
 // Initialization : Velocity field X Y
 for (let i = 0; i < velocityFieldXArray.length; i++) {
-    velocityFieldXArray[i] = 0;
+    velocityFieldXArray[i] = 1;
 }
 // Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldXStorage[0], 0, velocityFieldXArray);
 device.queue.writeBuffer(velocityFieldXStorage[1], 0, velocityFieldXArray);
 for (let i = 0; i < velocityFieldYArray.length; i++) {
-    velocityFieldYArray[i] = 0;
+    velocityFieldYArray[i] = 1;
 }
 // Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldYStorage[0], 0, velocityFieldYArray);
@@ -284,9 +284,11 @@ uploadTexture();
 
 const WORKGROUP_SIZE = 8; // WORKGROUP_SIZE is also in Compute Shader code
 
-const vertShaderModuleCode = await loadShader("./shader_vert.wgsl");
-const fragShaderModuleCode = await loadShader("./shader_frag.wgsl");
-const simShaderModuleCode = (await loadShader("./shader_comp.wgsl"))
+const densityVertShaderModuleCode = await loadShader("./density_shader_vert.wgsl");
+const densityFragShaderModuleCode = await loadShader("./density_shader_frag.wgsl");
+const velocityVertShaderModuleCode = await loadShader("./velocity_shader_vert.wgsl");
+const velocityFragShaderModuleCode = await loadShader("./velocity_shader_frag.wgsl");
+const simShaderModuleCode = (await loadShader("./density_shader_comp.wgsl"))
     .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
 const fieldCopyShaderModuleCode = (await loadShader("./fieldcopy.wgsl"))
     .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
@@ -295,13 +297,21 @@ const setBoundsShaderModuleCode = (await loadShader("./setbounds.wgsl"))
 const diffuseGS_ShaderModuleCode = (await loadShader("./diffuse_gs_step.wgsl"))
     .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
 
-const vertShaderModule = device.createShaderModule({
-    label: "Vertex shader",
-    code: vertShaderModuleCode
+const densityVertShaderModule = device.createShaderModule({
+    label: "Density Grid Vertex shader",
+    code: densityVertShaderModuleCode
 });
-const fragShaderModule = device.createShaderModule({
-    label: "Fragment shader",
-    code: fragShaderModuleCode
+const densityFragShaderModule = device.createShaderModule({
+    label: "Density Grid Fragment shader",
+    code: densityFragShaderModuleCode
+});
+const velocityVertShaderModule = device.createShaderModule({
+    label: "Velocity Grid Vertex shader",
+    code: velocityVertShaderModuleCode
+});
+const velocityFragShaderModule = device.createShaderModule({
+    label: "Velocity Grid Fragment shader",
+    code: velocityFragShaderModuleCode
 });
 const simShaderModule = device.createShaderModule({
     label: "Game of Life simulation shader",
@@ -390,17 +400,17 @@ const pipelineLayout = device.createPipelineLayout({
     bindGroupLayouts: [ bindGroupLayout ],
 });
 
-const pipeline = device.createRenderPipeline({
-    label: "Vertex and Fragment Pipeline",
+const densityPipeline = device.createRenderPipeline({
+    label: "Density Grid Vertex and Fragment Pipeline",
     layout: pipelineLayout,
 
     vertex: {
-        module: vertShaderModule,
+        module: densityVertShaderModule,
         entryPoint: "vsMain",
     },
 
     fragment: {
-        module: fragShaderModule,
+        module: densityFragShaderModule,
         entryPoint: "fsMain",
 
         targets: [
@@ -412,6 +422,31 @@ const pipeline = device.createRenderPipeline({
 
     primitive: {
         topology: "triangle-list",
+    },
+});
+
+const velocityPipeline = device.createRenderPipeline({
+    label: "Density Grid Vertex and Fragment Pipeline",
+    layout: pipelineLayout,
+
+    vertex: {
+        module: velocityVertShaderModule,
+        entryPoint: "vsMain",
+    },
+
+    fragment: {
+        module: velocityFragShaderModule,
+        entryPoint: "fsMain",
+
+        targets: [
+            {
+                format,
+            }
+        ]
+    },
+
+    primitive: {
+        topology: "line-list",
     },
 });
 
@@ -484,9 +519,9 @@ const uniformBindings = [
     },
 ];
 
-const bindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
-    label: "Cell renderer Bind group " + i,
-    layout: pipeline.getBindGroupLayout(0),
+const densityRenderBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Cell Density renderer Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
 
     entries: [
         ...uniformBindings,
@@ -505,13 +540,34 @@ const bindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
     ]
 }));
 
+const velocityRenderBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Cell Velocity renderer Bind group " + i,
+    layout: velocityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: densityFieldStorage[1 - i] }, // Does not matter
+        },
+        {
+            binding: 7,
+            resource: { buffer: velocityFieldYStorage[i] },
+        },
+    ]
+}));
+
 // =========================================================
 // Bind Groups for Diffusion
 // =========================================================
 
 const diffuseGSDensity_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
     label: "Diffusion Gauss-Seidel Relaxation Step Bind group " + i,
-    layout: pipeline.getBindGroupLayout(0),
+    layout: densityPipeline.getBindGroupLayout(0),
 
     entries: [
         ...uniformBindings,
@@ -532,7 +588,7 @@ const diffuseGSDensity_BindGroups = Array.from({ length: 2 }, (_, i) => device.c
 
 const setBoundsDensityBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
     label: "Diffusion Gauss-Seidel Relaxation Step Bind group " + i,
-    layout: pipeline.getBindGroupLayout(0),
+    layout: densityPipeline.getBindGroupLayout(0),
 
     entries: [
         ...uniformBindings,
@@ -546,14 +602,14 @@ const setBoundsDensityBindGroups = Array.from({ length: 2 }, (_, i) => device.cr
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[i] },
+            resource: { buffer: diffuseTempFieldStorage[i] }, // Does not matter
         },
     ]
 }));
 
 const fieldCopy_Temp_DiffuseTemp_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
     label: "Copy TempField to DiffuseTempField Bind group " + i,
-    layout: pipeline.getBindGroupLayout(0),
+    layout: densityPipeline.getBindGroupLayout(0),
 
     entries: [
         ...uniformBindings,
@@ -567,14 +623,14 @@ const fieldCopy_Temp_DiffuseTemp_BindGroups = Array.from({ length: 2 }, (_, i) =
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[1 - i] },
+            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
         },
     ]
 }));
 
 const fieldCopy_DiffuseTemp_Density_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
     label: "Copy DiffuseTempField to Density Field Bind group " + i,
-    layout: pipeline.getBindGroupLayout(0),
+    layout: densityPipeline.getBindGroupLayout(0),
 
     entries: [
         ...uniformBindings,
@@ -588,7 +644,7 @@ const fieldCopy_DiffuseTemp_Density_BindGroups = Array.from({ length: 2 }, (_, i
         },
         {
             binding: 7,
-            resource: { buffer: diffuseTempFieldStorage[1 - i] },
+            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
         },
     ]
 }));
@@ -712,17 +768,18 @@ function diffuseDensity() {
         fieldCopy_Temp_DiffuseTemp_ComputePass();
     }
     fieldCopy_DiffuseTemp_Density_ComputePass();
-    pingPongIndex = 1 - pingPongIndex;
+    flipPingPongIndex();
 }
 
 // =========================================================
 // Render Loop
 // =========================================================
 
-const UPDATE_INTERVAL = 50; // in ms
+const UPDATE_INTERVAL = 100; // in ms
 const workgroupCount = Math.ceil(Math.sqrt(GRID_WIDTH * GRID_HEIGHT / WORKGROUP_SIZE / WORKGROUP_SIZE));
 let step = 0;
 let pingPongIndex = 0;
+const flipPingPongIndex = () => {  pingPongIndex = 1 - pingPongIndex; };
 
 // Runs each frame
 function frame() {
@@ -731,22 +788,22 @@ function frame() {
     // Compute passes
     // for (let i = 0; i < GAUSS_SEIDEL; i++) {
     //     simComputePass();
-    //     pingPongIndex = 1 - pingPongIndex;
+    //     flipPingPongIndex();
     // }
     diffuseDensity();
 
 
     // updateTexture();
     step++;
-    // pingPongIndex = 1 - pingPongIndex;
+    // flipPingPongIndex();
 
 
     const view = context
         .getCurrentTexture()
         .createView();
 
-    // Render pass
-    const pass = encoder.beginRenderPass({
+    // Render pass for density grid
+    const densityRenderPass = encoder.beginRenderPass({
         colorAttachments: [
             {
                 view,
@@ -762,13 +819,39 @@ function frame() {
         ]
     });
 
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroups[pingPongIndex]);
+    densityRenderPass.setPipeline(densityPipeline);
+    densityRenderPass.setBindGroup(0, densityRenderBindGroups[pingPongIndex]);
 
     // Draw fullscreen quad
-    pass.draw(6, GRID_WIDTH * GRID_HEIGHT);
+    densityRenderPass.draw(6, GRID_WIDTH * GRID_HEIGHT);
 
-    pass.end();
+    densityRenderPass.end();
+
+    // Render pass for velocity
+    const velocityRenderPass = encoder.beginRenderPass({
+        colorAttachments: [
+            {
+                view,
+                clearValue: {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 0,
+                },
+                loadOp: "load",
+                storeOp: "store",
+            }
+        ]
+    });
+
+    velocityRenderPass.setPipeline(velocityPipeline);
+    velocityRenderPass.setBindGroup(0, velocityRenderBindGroups[pingPongIndex]);
+
+    // Draw line segment
+    velocityRenderPass.draw(2, GRID_WIDTH * GRID_HEIGHT);
+
+    velocityRenderPass.end();
+
 
     device.queue.submit([encoder.finish()]);
 

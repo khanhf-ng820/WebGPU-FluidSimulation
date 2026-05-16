@@ -51,7 +51,7 @@ fn csMain(@builtin(global_invocation_id) cell : vec3<u32>) {
     // }
 
     // Horizontal walls
-    if (idx > 0 && idx < gridWidth - 1) {
+	else if (idx > 0 && idx < gridWidth - 1) {
         field[idx] = horizontalWalls * field[idx + gridWidth];
     } else if (idx > gridSize - gridWidth && idx < gridSize - 1) {
         field[idx] = horizontalWalls * field[idx - gridWidth];
@@ -64,16 +64,16 @@ fn csMain(@builtin(global_invocation_id) cell : vec3<u32>) {
     // }
 
     // Four corner cells
-    if (idx == 0) {
+	else if (idx == 0) {
         field[0] = (field[1] + field[gridWidth]) / 2.;
     }
-    if (idx == gridWidth - 1) {
+	else if (idx == gridWidth - 1) {
         field[gridWidth - 1] = (field[gridWidth - 2] + field[gridWidth * 2 - 1]) / 2.;
     }
-    if (idx == gridSize - 1) {
+	else if (idx == gridSize - 1) {
         field[gridSize - 1] = (field[gridSize - 2] + field[gridSize - 1 - gridWidth]) / 2.;
     }
-    if (idx == gridSize - gridWidth) {
+	else if (idx == gridSize - gridWidth) {
         field[gridSize - gridWidth] = (field[gridSize - gridWidth + 1] + field[gridSize - gridWidth * 2]) / 2.;
     }
 }
