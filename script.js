@@ -211,15 +211,16 @@ device.queue.writeBuffer(densityFieldStorage[0], 0, densityFieldArray);
 // Write to Storage Buffer
 device.queue.writeBuffer(densityFieldStorage[1], 0, densityFieldArray);
 
-// Initialization : Velocity field X Y
+// Initialization : Velocity field X
 for (let i = 0; i < velocityFieldXArray.length; i++) {
-    velocityFieldXArray[i] = i > velocityFieldXArray.length/2 ? 1 : -1;
+    velocityFieldXArray[i] = (i > velocityFieldXArray.length/2 ? 1 : -1) * 3;
 }
 // Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldXStorage[0], 0, velocityFieldXArray);
 device.queue.writeBuffer(velocityFieldXStorage[1], 0, velocityFieldXArray);
+// Initialization : Velocity field Y
 for (let i = 0; i < velocityFieldYArray.length; i++) {
-    velocityFieldYArray[i] = i > velocityFieldYArray.length/2 ? 1 : 1;
+    velocityFieldYArray[i] = (i > velocityFieldYArray.length/2 ? 1 : -1) * 3;
 }
 // Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldYStorage[0], 0, velocityFieldYArray);
@@ -716,6 +717,71 @@ const fieldCopy_DiffuseTemp_VelocityX_BindGroups = Array.from({ length: 2 }, (_,
 }));
 
 
+///// Velocity Y
+const diffuseGSVelocityY_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Diffusion Gauss-Seidel Relaxation Step for VelocityY Bind group " + i,
+    layout: velocityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: velocityFieldYStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: diffuseTempFieldStorage[i] },
+        },
+    ]
+}));
+
+const setBoundsVelocityYBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Set Bounds VelocityY Bind group " + i,
+    layout: velocityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: setBoundsTypeScalarStorage },
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: diffuseTempFieldStorage[i] }, // Does not matter
+        },
+    ]
+}));
+
+const fieldCopy_DiffuseTemp_VelocityY_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Copy DiffuseTempField to VelocityY Field Bind group " + i,
+    layout: velocityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: diffuseTempFieldStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: velocityFieldYStorage[1 - i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: diffuseTempFieldStorage[1 - i] }, // Does not matter
+        },
+    ]
+}));
+
+
 // =========================================================
 // Resize Handling
 // =========================================================
@@ -779,7 +845,7 @@ function simComputePass() {
     simPass.end();
 }
 
-///// Diffuse Density
+///// Diffuse Density /////
 function diffuseGSDensity_ComputePass() {
     const diffuseGSDensity_Pass = encoder.beginComputePass();
 
@@ -824,7 +890,7 @@ function fieldCopy_DiffuseTemp_Density_ComputePass() {
     fieldCopy_DiffuseTemp_Density_Pass.end();
 }
 
-///// Diffuse VelocityX
+///// Diffuse VelocityX /////
 function diffuseGSVelocityX_ComputePass() {
     const diffuseGSVelocityX_Pass = encoder.beginComputePass();
 
@@ -858,19 +924,44 @@ function fieldCopy_DiffuseTemp_VelocityX_ComputePass() {
     fieldCopy_DiffuseTemp_VelocityX_Pass.end();
 }
 
+///// Diffuse VelocityY /////
+function diffuseGSVelocityY_ComputePass() {
+    const diffuseGSVelocityY_Pass = encoder.beginComputePass();
+
+    diffuseGSVelocityY_Pass.setPipeline(diffuseGS_Pipeline);
+    diffuseGSVelocityY_Pass.setBindGroup(0, diffuseGSVelocityY_BindGroups[pingPongIndex]);
+
+    diffuseGSVelocityY_Pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+    diffuseGSVelocityY_Pass.end();
+}
+
+function setBoundsVelocityY_ComputePass() {
+    const setBoundsVelocityY_Pass = encoder.beginComputePass();
+
+    setBoundsVelocityY_Pass.setPipeline(setBoundsPipeline);
+    setBoundsVelocityY_Pass.setBindGroup(0, setBoundsVelocityYBindGroups[pingPongIndex]);
+
+    setBoundsVelocityY_Pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+    setBoundsVelocityY_Pass.end();
+}
+
+function fieldCopy_DiffuseTemp_VelocityY_ComputePass() {
+    const fieldCopy_DiffuseTemp_VelocityY_Pass = encoder.beginComputePass();
+
+    fieldCopy_DiffuseTemp_VelocityY_Pass.setPipeline(fieldCopyPipeline);
+    fieldCopy_DiffuseTemp_VelocityY_Pass.setBindGroup(0, fieldCopy_DiffuseTemp_VelocityY_BindGroups[pingPongIndex]);
+
+    fieldCopy_DiffuseTemp_VelocityY_Pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+    fieldCopy_DiffuseTemp_VelocityY_Pass.end();
+}
+
+
 // =========================================================
 // Fluid Simulation Steps
 // =========================================================
-
-function diffuseDensity() {
-    for (let i = 0; i < GAUSS_SEIDEL; i++) {
-        diffuseGSDensity_ComputePass();
-        setBoundsDensity_ComputePass();
-        fieldCopy_Temp_DiffuseTemp_ComputePass();
-    }
-    fieldCopy_DiffuseTemp_Density_ComputePass();
-    pingPongIndex = 1 - pingPongIndex;
-}
 
 function diffuseVelocityX() {
     for (let i = 0; i < GAUSS_SEIDEL; i++) {
@@ -880,6 +971,26 @@ function diffuseVelocityX() {
     }
     fieldCopy_DiffuseTemp_VelocityX_ComputePass();
     // pingPongIndex = 1 - pingPongIndex;
+}
+
+function diffuseVelocityY() {
+    for (let i = 0; i < GAUSS_SEIDEL; i++) {
+        diffuseGSVelocityY_ComputePass();
+        setBoundsVelocityY_ComputePass();
+        fieldCopy_Temp_DiffuseTemp_ComputePass();
+    }
+    fieldCopy_DiffuseTemp_VelocityY_ComputePass();
+    // pingPongIndex = 1 - pingPongIndex;
+}
+
+function diffuseDensity() {
+    for (let i = 0; i < GAUSS_SEIDEL; i++) {
+        diffuseGSDensity_ComputePass();
+        setBoundsDensity_ComputePass();
+        fieldCopy_Temp_DiffuseTemp_ComputePass();
+    }
+    fieldCopy_DiffuseTemp_Density_ComputePass();
+    pingPongIndex = 1 - pingPongIndex;
 }
 
 // =========================================================
@@ -902,6 +1013,7 @@ function frame() {
     // }
 
     diffuseVelocityX();
+    diffuseVelocityY();
 
     diffuseDensity();
 

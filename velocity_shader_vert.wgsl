@@ -15,7 +15,7 @@ struct VertexOutput {
 fn vsMain(@builtin(vertex_index) vertexIndex : u32,
     @builtin(instance_index) instance : u32) -> VertexOutput {
 
-    let scalingFactor : f32 = 1.;
+    let scalingFactor : f32 = 1./3.;
 
     let positions = array<vec2<f32>, 2>(
         vec2<f32>(0.0, 0.0),
