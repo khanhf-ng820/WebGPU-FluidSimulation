@@ -199,7 +199,7 @@ const pressureFieldStorage = device.createBuffer({
 });
 
 
-const placeholderStorage = Array.from( { length: 3 }, (_, i) => device.createBuffer({
+const placeholderStorage = Array.from({ length: 3 }, (_, i) => device.createBuffer({
     label: "Placeholder Storage",
     size: 4,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
