@@ -1,5 +1,6 @@
 async function loadShader(url) {
-    const response = await fetch(url);
+    const cacheBustUrl = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
+    const response = await fetch(cacheBustUrl);
 
     if (!response.ok) {
         throw new Error(`Failed to load shader: ${url}`);
@@ -225,27 +226,12 @@ const setBoundsTypeVectorYStorage = device.createBuffer({
 
 
 
-// Initialization : Density field
-for (let i = 0; i < densityFieldArray.length; i++) {
-    densityFieldArray[i] = Math.random() > 0.6 ? 1 : 0;
-}
-// Write to Storage Buffer
+// Initialization : All fields start at zero (user paints with mouse)
+// Write to Storage Buffers
 device.queue.writeBuffer(densityFieldStorage[0], 0, densityFieldArray);
-// Write to Storage Buffer
 device.queue.writeBuffer(densityFieldStorage[1], 0, densityFieldArray);
-
-// Initialization : Velocity field X
-for (let i = 0; i < velocityFieldXArray.length; i++) {
-    velocityFieldXArray[i] = (i > velocityFieldXArray.length/2 ? 1 : -1) * 3;
-}
-// Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldXStorage[0], 0, velocityFieldXArray);
 device.queue.writeBuffer(velocityFieldXStorage[1], 0, velocityFieldXArray);
-// Initialization : Velocity field Y
-for (let i = 0; i < velocityFieldYArray.length; i++) {
-    velocityFieldYArray[i] = (i > velocityFieldYArray.length/2 ? 1 : 1) * 3;
-}
-// Write to Storage Buffer
 device.queue.writeBuffer(velocityFieldYStorage[0], 0, velocityFieldYArray);
 device.queue.writeBuffer(velocityFieldYStorage[1], 0, velocityFieldYArray);
 
@@ -320,7 +306,7 @@ const densityVertShaderModuleCode = await loadShader("./density_shader_vert.wgsl
 const densityFragShaderModuleCode = await loadShader("./density_shader_frag.wgsl");
 const velocityVertShaderModuleCode = await loadShader("./velocity_shader_vert.wgsl");
 const velocityFragShaderModuleCode = await loadShader("./velocity_shader_frag.wgsl");
-const simShaderModuleCode = (await loadShader("./density_shader_comp.wgsl"))
+const advectShaderModuleCode = (await loadShader("./advect.wgsl"))
     .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
 const fieldCopyShaderModuleCode = (await loadShader("./fieldcopy.wgsl"))
     .replaceAll(/\$\{WORKGROUP_SIZE\}/g, WORKGROUP_SIZE);
@@ -351,9 +337,9 @@ const velocityFragShaderModule = device.createShaderModule({
     label: "Velocity Grid Fragment shader",
     code: velocityFragShaderModuleCode
 });
-const simShaderModule = device.createShaderModule({
-    label: "Game of Life simulation shader",
-    code: simShaderModuleCode
+const advectShaderModule = device.createShaderModule({
+    label: "Advection shader",
+    code: advectShaderModuleCode
 });
 
 const fieldCopyShaderModule = device.createShaderModule({
@@ -511,11 +497,38 @@ const velocityPipeline = device.createRenderPipeline({
 // =========================================================
 // Create a compute pipeline that updates the cell state.
 
-const simulationPipeline = device.createComputePipeline({
-    label: "Simulation pipeline",
+const calcDivPipeline = device.createComputePipeline({
+    label: "Calculate Divergence pipeline",
     layout: pipelineLayout,
     compute: {
-        module: simShaderModule,
+        module: calcDivShaderModule,
+        entryPoint: "csMain",
+    }
+});
+
+const calcPressureGS_Pipeline = device.createComputePipeline({
+    label: "Calculate Pressure Gauss-Seidel Step pipeline",
+    layout: pipelineLayout,
+    compute: {
+        module: calcPressureGS_ShaderModule,
+        entryPoint: "csMain",
+    }
+});
+
+const projectPipeline = device.createComputePipeline({
+    label: "Project Field pipeline",
+    layout: pipelineLayout,
+    compute: {
+        module: projectShaderModule,
+        entryPoint: "csMain",
+    }
+});
+
+const advectPipeline = device.createComputePipeline({
+    label: "Advection pipeline",
+    layout: pipelineLayout,
+    compute: {
+        module: advectShaderModule,
         entryPoint: "csMain",
     }
 });
@@ -717,7 +730,7 @@ const fieldCopy_DiffuseTemp_Density_BindGroups = Array.from({ length: 2 }, (_, i
         },
         {
             binding: 6,
-            resource: { buffer: densityFieldStorage[1 - i] },
+            resource: { buffer: densityFieldStorage[i] },
         },
         {
             binding: 7,
@@ -765,7 +778,7 @@ const setBoundsVelocityXBindGroups = Array.from({ length: 2 }, (_, i) => device.
         ...uniformBindings,
         {
             binding: 5,
-            resource: { buffer: setBoundsTypeScalarStorage },
+            resource: { buffer: setBoundsTypeVectorXStorage },
         },
         {
             binding: 6,
@@ -794,7 +807,7 @@ const fieldCopy_DiffuseTemp_VelocityX_BindGroups = Array.from({ length: 2 }, (_,
         },
         {
             binding: 6,
-            resource: { buffer: velocityFieldXStorage[1 - i] },
+            resource: { buffer: velocityFieldXStorage[i] },
         },
         {
             binding: 7,
@@ -842,7 +855,7 @@ const setBoundsVelocityYBindGroups = Array.from({ length: 2 }, (_, i) => device.
         ...uniformBindings,
         {
             binding: 5,
-            resource: { buffer: setBoundsTypeScalarStorage },
+            resource: { buffer: setBoundsTypeVectorYStorage },
         },
         {
             binding: 6,
@@ -871,7 +884,7 @@ const fieldCopy_DiffuseTemp_VelocityY_BindGroups = Array.from({ length: 2 }, (_,
         },
         {
             binding: 6,
-            resource: { buffer: velocityFieldYStorage[1 - i] },
+            resource: { buffer: velocityFieldYStorage[i] },
         },
         {
             binding: 7,
@@ -883,6 +896,346 @@ const fieldCopy_DiffuseTemp_VelocityY_BindGroups = Array.from({ length: 2 }, (_,
         }
     ]
 }));
+
+
+// =========================================================
+// Bind Groups for Project (removeDiv)
+// =========================================================
+
+const calcDivBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Calculate Divergence Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: divFieldStorage },
+        },
+        {
+            binding: 7,
+            resource: { buffer: velocityFieldYStorage[i] },
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[0] } // Placeholder
+        }
+    ]
+}));
+
+const calcPressureGS_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Calculate Pressure GS Step Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: divFieldStorage },
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: pressureFieldStorage },
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[0] } // Placeholder
+        }
+    ]
+}));
+
+const fieldCopy_Temp_Pressure_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Copy TempField to PressureField Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: pressureFieldStorage },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
+    ]
+}));
+
+const projectFieldBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Project Field Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: pressureFieldStorage },
+        },
+        {
+            binding: 6,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: velocityFieldYStorage[i] }
+        }
+    ]
+}));
+
+const setBoundsVelXAfterProject_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Set Bounds VelocityX After Project Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: setBoundsTypeVectorXStorage },
+        },
+        {
+            binding: 6,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
+    ]
+}));
+
+const setBoundsVelYAfterProject_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Set Bounds VelocityY After Project Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: setBoundsTypeVectorYStorage },
+        },
+        {
+            binding: 6,
+            resource: { buffer: velocityFieldYStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
+    ]
+}));
+
+
+// =========================================================
+// Bind Groups for Advection
+// =========================================================
+
+const advectDensityBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Advect Density Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: densityFieldStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 8,
+            resource: { buffer: velocityFieldYStorage[i] }
+        }
+    ]
+}));
+
+const advectVelXBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Advect VelocityX Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: velocityFieldXStorage[i] }, // Same as binding 5 (self-advect, both read-only)
+        },
+        {
+            binding: 8,
+            resource: { buffer: velocityFieldYStorage[i] }
+        }
+    ]
+}));
+
+// For advecting velY, we need velY at both read-only (binding 5) and read-write (binding 8).
+// WebGPU does not allow the same buffer in both access modes simultaneously.
+// Solution: copy velY to diffuseTemp first, use diffuseTemp at binding 5.
+const fieldCopy_VelY_DiffuseTemp_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Copy VelocityY to DiffuseTemp for Advect Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: velocityFieldYStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: diffuseTempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
+    ]
+}));
+
+const advectVelYBindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Advect VelocityY Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: diffuseTempFieldStorage[i] }, // Copy of velY
+        },
+        {
+            binding: 6,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 8,
+            resource: { buffer: velocityFieldYStorage[i] }
+        }
+    ]
+}));
+
+// Copy advection results back to field buffers
+const fieldCopy_Temp_Density_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Copy Temp to Density (after advect) Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: densityFieldStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
+    ]
+}));
+
+const fieldCopy_Temp_VelX_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Copy Temp to VelocityX (after advect) Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: velocityFieldXStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
+    ]
+}));
+
+const fieldCopy_Temp_VelY_BindGroups = Array.from({ length: 2 }, (_, i) => device.createBindGroup({
+    label: "Copy Temp to VelocityY (after advect) Bind group " + i,
+    layout: densityPipeline.getBindGroupLayout(0),
+
+    entries: [
+        ...uniformBindings,
+        {
+            binding: 5,
+            resource: { buffer: tempFieldStorage[i] },
+        },
+        {
+            binding: 6,
+            resource: { buffer: velocityFieldYStorage[i] },
+        },
+        {
+            binding: 7,
+            resource: { buffer: placeholderStorage[0] }, // Placeholder
+        },
+        {
+            binding: 8,
+            resource: { buffer: placeholderStorage[1] } // Placeholder
+        }
+    ]
+}));
+
 
 
 // =========================================================
@@ -937,16 +1290,7 @@ function updateTexture() {
 
 let encoder;
 
-function simComputePass() {
-    const simPass = encoder.beginComputePass();
 
-    simPass.setPipeline(simulationPipeline);
-    simPass.setBindGroup(0, bindGroups[pingPongIndex]);
-
-    simPass.dispatchWorkgroups(workgroupCount, workgroupCount);
-
-    simPass.end();
-}
 
 ///// Diffuse Density /////
 function diffuseGSDensity_ComputePass() {
@@ -1063,6 +1407,120 @@ function fieldCopy_DiffuseTemp_VelocityY_ComputePass() {
 
 
 // =========================================================
+// Compute Shader Passes — Project (removeDiv)
+// =========================================================
+
+function calcDiv_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(calcDivPipeline);
+    pass.setBindGroup(0, calcDivBindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function calcPressureGS_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(calcPressureGS_Pipeline);
+    pass.setBindGroup(0, calcPressureGS_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function fieldCopy_Temp_Pressure_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(fieldCopyPipeline);
+    pass.setBindGroup(0, fieldCopy_Temp_Pressure_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function projectField_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(projectPipeline);
+    pass.setBindGroup(0, projectFieldBindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function setBoundsVelXAfterProject_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(setBoundsPipeline);
+    pass.setBindGroup(0, setBoundsVelXAfterProject_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function setBoundsVelYAfterProject_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(setBoundsPipeline);
+    pass.setBindGroup(0, setBoundsVelYAfterProject_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+
+// =========================================================
+// Compute Shader Passes — Advection
+// =========================================================
+
+function advectDensity_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(advectPipeline);
+    pass.setBindGroup(0, advectDensityBindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function advectVelX_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(advectPipeline);
+    pass.setBindGroup(0, advectVelXBindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function fieldCopy_VelY_DiffuseTemp_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(fieldCopyPipeline);
+    pass.setBindGroup(0, fieldCopy_VelY_DiffuseTemp_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function advectVelY_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(advectPipeline);
+    pass.setBindGroup(0, advectVelYBindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function fieldCopy_Temp_Density_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(fieldCopyPipeline);
+    pass.setBindGroup(0, fieldCopy_Temp_Density_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function fieldCopy_Temp_VelX_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(fieldCopyPipeline);
+    pass.setBindGroup(0, fieldCopy_Temp_VelX_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+function fieldCopy_Temp_VelY_ComputePass() {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(fieldCopyPipeline);
+    pass.setBindGroup(0, fieldCopy_Temp_VelY_BindGroups[pingPongIndex]);
+    pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    pass.end();
+}
+
+
+// =========================================================
 // Fluid Simulation Steps
 // =========================================================
 
@@ -1073,7 +1531,6 @@ function diffuseVelocityX() {
         fieldCopy_Temp_DiffuseTemp_ComputePass();
     }
     fieldCopy_DiffuseTemp_VelocityX_ComputePass();
-    // pingPongIndex = 1 - pingPongIndex;
 }
 
 function diffuseVelocityY() {
@@ -1083,7 +1540,6 @@ function diffuseVelocityY() {
         fieldCopy_Temp_DiffuseTemp_ComputePass();
     }
     fieldCopy_DiffuseTemp_VelocityY_ComputePass();
-    // pingPongIndex = 1 - pingPongIndex;
 }
 
 function diffuseDensity() {
@@ -1093,39 +1549,157 @@ function diffuseDensity() {
         fieldCopy_Temp_DiffuseTemp_ComputePass();
     }
     fieldCopy_DiffuseTemp_Density_ComputePass();
-    pingPongIndex = 1 - pingPongIndex;
 }
+
+// Project (removeDiv): makes velocity field divergence-free
+function removeDiv() {
+    // Clear pressure field to zero before solving
+    encoder.clearBuffer(pressureFieldStorage);
+
+    // Step 1: Calculate divergence of velocity field
+    calcDiv_ComputePass();
+
+    // Step 2: Solve for pressure field using Gauss-Seidel iterations
+    for (let i = 0; i < GAUSS_SEIDEL; i++) {
+        calcPressureGS_ComputePass();
+        // setBounds(SCALAR) on temp field — reuse density setBounds (same type + target)
+        setBoundsDensity_ComputePass();
+        fieldCopy_Temp_Pressure_ComputePass();
+    }
+
+    // Step 3: Subtract pressure gradient from velocity field
+    projectField_ComputePass();
+
+    // Step 4: Apply boundary conditions to velocity
+    setBoundsVelXAfterProject_ComputePass();
+    setBoundsVelYAfterProject_ComputePass();
+}
+
+// Advect density field through velocity field
+function advectDensity() {
+    advectDensity_ComputePass();
+    // setBounds on tempField (SCALAR) — reuse existing setBounds density bind groups
+    setBoundsDensity_ComputePass();
+    // Copy result back to density field
+    fieldCopy_Temp_Density_ComputePass();
+}
+
+// Advect velocity X field through velocity field
+function advectVelocityX() {
+    advectVelX_ComputePass();
+    // setBounds on tempField (VECTOR_X) — reuse existing setBounds velocityX bind groups
+    setBoundsVelocityX_ComputePass();
+    // Copy result back to velocity X field
+    fieldCopy_Temp_VelX_ComputePass();
+}
+
+// Advect velocity Y field through velocity field
+function advectVelocityY() {
+    // Copy velY to diffuseTemp first (avoids read-only + read-write conflict on same buffer)
+    fieldCopy_VelY_DiffuseTemp_ComputePass();
+    advectVelY_ComputePass();
+    // setBounds on tempField (VECTOR_Y) — reuse existing setBounds velocityY bind groups
+    setBoundsVelocityY_ComputePass();
+    // Copy result back to velocity Y field
+    fieldCopy_Temp_VelY_ComputePass();
+}
+
+
+// =========================================================
+// Mouse Interaction
+// =========================================================
+
+const MAX_VEL = 1.0;
+const ADD_AMOUNT = 0.75;
+
+let prevMouseX = -1;
+let prevMouseY = -1;
+
+canvas.addEventListener('mousemove', (e) => {
+    if (e.buttons !== 1) return; // Only on left-click drag
+
+    const rect = canvas.getBoundingClientRect();
+    const cellX = Math.floor((e.clientX - rect.left) / rect.width * GRID_WIDTH);
+    // Flip Y axis to match WebGPU clip space
+    const cellY = GRID_HEIGHT - 1 - Math.floor((e.clientY - rect.top) / rect.height * GRID_HEIGHT);
+
+    if (cellX < 0 || cellX >= GRID_WIDTH || cellY < 0 || cellY >= GRID_HEIGHT) return;
+
+    const idx = cellY * GRID_WIDTH + cellX;
+
+    // Add density at mouse position
+    // For simplicity, just set a fixed density value (will quickly diffuse)
+    device.queue.writeBuffer(densityFieldStorage[pingPongIndex], idx * 4, new Float32Array([1.0]));
+
+    // Add velocity in the direction of mouse movement
+    if (prevMouseX >= 0) {
+        const velMult = MAX_VEL * 5;
+        const dx = (cellX - prevMouseX) * velMult;
+        const dy = (cellY - prevMouseY) * velMult;
+        
+        // Only write if there's actual movement, to avoid killing existing momentum with zero
+        if (Math.abs(dx) > 0 || Math.abs(dy) > 0) {
+            device.queue.writeBuffer(velocityFieldXStorage[pingPongIndex], idx * 4, new Float32Array([dx]));
+            device.queue.writeBuffer(velocityFieldYStorage[pingPongIndex], idx * 4, new Float32Array([dy]));
+        }
+    }
+
+    prevMouseX = cellX;
+    prevMouseY = cellY;
+});
+
+canvas.addEventListener('mouseup', () => {
+    prevMouseX = -1;
+    prevMouseY = -1;
+});
+
+canvas.addEventListener('mouseleave', () => {
+    prevMouseX = -1;
+    prevMouseY = -1;
+});
+
 
 // =========================================================
 // Render Loop
 // =========================================================
 
-const UPDATE_INTERVAL = 100; // in ms
 const workgroupCount = Math.ceil(Math.sqrt(GRID_WIDTH * GRID_HEIGHT / WORKGROUP_SIZE / WORKGROUP_SIZE));
 let step = 0;
 let pingPongIndex = 0;
 
-// Runs each frame
+// Runs each frame (60 FPS via requestAnimationFrame)
 function frame() {
     encoder = device.createCommandEncoder();
 
-    // Compute passes
-    // for (let i = 0; i < GAUSS_SEIDEL; i++) {
-    //     simComputePass();
-    //     pingPongIndex = 1 - pingPongIndex;
-    // }
+    // ===== Full Jos Stam Fluid Simulation Pipeline =====
 
+    // 1. Diffuse velocity
     diffuseVelocityX();
     diffuseVelocityY();
 
+    // 2. Project (make velocity divergence-free)
+    removeDiv();
+
+    // 3. Advect velocity
+    advectVelocityX();
+    advectVelocityY();
+
+    // 4. Project again
+    removeDiv();
+
+    // 5. Diffuse density
     diffuseDensity();
 
+    // 6. Advect density
+    advectDensity();
 
+    // 7. Final project
+    removeDiv();
 
-    // updateTexture();
     step++;
-    // pingPongIndex = 1 - pingPongIndex;
 
+
+    // ===== Rendering =====
 
     const view = context
         .getCurrentTexture()
@@ -1156,7 +1730,7 @@ function frame() {
 
     densityRenderPass.end();
 
-    // Render pass for velocity
+    // Render pass for velocity arrows
     const velocityRenderPass = encoder.beginRenderPass({
         colorAttachments: [
             {
@@ -1176,7 +1750,7 @@ function frame() {
     velocityRenderPass.setPipeline(velocityPipeline);
     velocityRenderPass.setBindGroup(0, velocityRenderBindGroups[pingPongIndex]);
 
-    // Draw line segment
+    // Draw line segment per cell
     velocityRenderPass.draw(2, GRID_WIDTH * GRID_HEIGHT);
 
     velocityRenderPass.end();
@@ -1184,17 +1758,7 @@ function frame() {
 
     device.queue.submit([encoder.finish()]);
 
-    // requestAnimationFrame(frame);
+    requestAnimationFrame(frame);
 }
 
-
-// requestAnimationFrame(frame);
-setInterval(frame, UPDATE_INTERVAL);
-
-
-
-
-
-// main().catch(err => {
-//     console.error(err);
-// });
+requestAnimationFrame(frame);

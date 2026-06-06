@@ -24,20 +24,4 @@ fn fsMain(in : VSOut) -> @location(0) vec4<f32> {
     // Example: no ping-pong rendering
     let sampledColor = textureSample(prevTex, prevSampler, in.cell_coor / grid.xy);
     return sampledColor * clamp(cellState[cell_idx], 0., 1.);
-
-
-
-    // Example: diffusion
-    let dims = vec2<f32>(textureDimensions(prevTex));
-
-    let texel = 1.0 / dims;
-
-    let center = textureSample(prevTex, prevSampler, in.uv);
-
-    let left  = textureSample(prevTex, prevSampler, in.uv + vec2(-texel.x, 0.0));
-    let right = textureSample(prevTex, prevSampler, in.uv + vec2(texel.x, 0.0));
-
-    let color = (center + left + right) / 3.0;
-
-    return color;
 }

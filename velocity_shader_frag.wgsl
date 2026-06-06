@@ -12,34 +12,19 @@ var prevSampler : sampler;
 struct VSOut {
     @builtin(position) position : vec4<f32>,
     @location(0) uv : vec2<f32>,
-    @location(1) cell_coor : vec2f
+    @location(1) cell_coor : vec2f,
+    @location(2) magnitude : f32
 };
 
 
 
 @fragment
 fn fsMain(in : VSOut) -> @location(0) vec4<f32> {
-
-    let cell_idx = u32(in.cell_coor.x + in.cell_coor.y * grid.x);
-    return vec4f(0., 1., 0., 0.);
-
-    // Example: no ping-pong rendering
-    let sampledColor = textureSample(prevTex, prevSampler, in.cell_coor / grid.xy);
-    // return sampledColor * clamp(cellStateX[cell_idx], 0., 1.);
-
-
-
-    // Example: diffusion
-    let dims = vec2<f32>(textureDimensions(prevTex));
-
-    let texel = 1.0 / dims;
-
-    let center = textureSample(prevTex, prevSampler, in.uv);
-
-    let left  = textureSample(prevTex, prevSampler, in.uv + vec2(-texel.x, 0.0));
-    let right = textureSample(prevTex, prevSampler, in.uv + vec2(texel.x, 0.0));
-
-    let color = (center + left + right) / 3.0;
-
-    return color;
+    if (in.magnitude < 0.0001) {
+        discard;
+    }
+    
+    // Base color on magnitude
+    let intensity = clamp(in.magnitude / 1.0, 0.2, 1.0);
+    return vec4f(0.0, intensity, 0.0, 1.0);
 }
