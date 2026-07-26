@@ -55,8 +55,8 @@ device.queue.writeBuffer(uniformGridBuffer, 0, uniformGridArray);
 const GAUSS_SEIDEL = 20;
 const MAX_DENSITY = 1.0;
 
-const diffRate = 0.00001;
-const dt = 1.0;
+const diffRate = 0.0001;
+const dt = 0.15;
 
 const uniformDiffRateArray = new Float32Array( [diffRate] );
 const uniformDiffRateBuffer = device.createBuffer({
@@ -1612,51 +1612,131 @@ function advectVelocityY() {
 const MAX_VEL = 1.0;
 const ADD_AMOUNT = 0.75;
 
-let prevMouseX = -1;
-let prevMouseY = -1;
+let isMouseDown = false;
+let currentMouseX = -1;
+let currentMouseY = -1;
+let lastFrameMouseX = -1;
+let lastFrameMouseY = -1;
 
-canvas.addEventListener('mousemove', (e) => {
-    if (e.buttons !== 1) return; // Only on left-click drag
-
+function getGridCell(e) {
     const rect = canvas.getBoundingClientRect();
     const cellX = Math.floor((e.clientX - rect.left) / rect.width * GRID_WIDTH);
     // Flip Y axis to match WebGPU clip space
     const cellY = GRID_HEIGHT - 1 - Math.floor((e.clientY - rect.top) / rect.height * GRID_HEIGHT);
+    return { cellX, cellY };
+}
 
-    if (cellX < 0 || cellX >= GRID_WIDTH || cellY < 0 || cellY >= GRID_HEIGHT) return;
+canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // Only on left-click drag
+    isMouseDown = true;
+    const { cellX, cellY } = getGridCell(e);
+    if (cellX >= 0 && cellX < GRID_WIDTH && cellY >= 0 && cellY < GRID_HEIGHT) {
+        currentMouseX = cellX;
+        currentMouseY = cellY;
+        lastFrameMouseX = cellX;
+        lastFrameMouseY = cellY;
+    }
+});
 
-    const idx = cellY * GRID_WIDTH + cellX;
-
-    // Add density at mouse position
-    // For simplicity, just set a fixed density value (will quickly diffuse)
-    device.queue.writeBuffer(densityFieldStorage[pingPongIndex], idx * 4, new Float32Array([1.0]));
-
-    // Add velocity in the direction of mouse movement
-    if (prevMouseX >= 0) {
-        const velMult = MAX_VEL * 5;
-        const dx = (cellX - prevMouseX) * velMult;
-        const dy = (cellY - prevMouseY) * velMult;
-        
-        // Only write if there's actual movement, to avoid killing existing momentum with zero
-        if (Math.abs(dx) > 0 || Math.abs(dy) > 0) {
-            device.queue.writeBuffer(velocityFieldXStorage[pingPongIndex], idx * 4, new Float32Array([dx]));
-            device.queue.writeBuffer(velocityFieldYStorage[pingPongIndex], idx * 4, new Float32Array([dy]));
+canvas.addEventListener('mousemove', (e) => {
+    if (!isMouseDown && e.buttons !== 1) {
+        isMouseDown = false;
+        return;
+    }
+    isMouseDown = true;
+    const { cellX, cellY } = getGridCell(e);
+    if (cellX >= 0 && cellX < GRID_WIDTH && cellY >= 0 && cellY < GRID_HEIGHT) {
+        currentMouseX = cellX;
+        currentMouseY = cellY;
+        if (lastFrameMouseX < 0) {
+            lastFrameMouseX = cellX;
+            lastFrameMouseY = cellY;
         }
     }
-
-    prevMouseX = cellX;
-    prevMouseY = cellY;
 });
 
 canvas.addEventListener('mouseup', () => {
-    prevMouseX = -1;
-    prevMouseY = -1;
+    isMouseDown = false;
+    lastFrameMouseX = -1;
+    lastFrameMouseY = -1;
 });
 
 canvas.addEventListener('mouseleave', () => {
-    prevMouseX = -1;
-    prevMouseY = -1;
+    isMouseDown = false;
+    lastFrameMouseX = -1;
+    lastFrameMouseY = -1;
 });
+
+function applyMouseInput() {
+    if (!isMouseDown || currentMouseX < 0 || currentMouseY < 0) return;
+    if (lastFrameMouseX < 0 || lastFrameMouseY < 0) {
+        lastFrameMouseX = currentMouseX;
+        lastFrameMouseY = currentMouseY;
+    }
+
+    // Scale mouse velocity to physical simulation range [0, MAX_VEL]
+    const velMult = 0.8;
+    let dx = (currentMouseX - lastFrameMouseX) * velMult;
+    let dy = (currentMouseY - lastFrameMouseY) * velMult;
+
+    // Clamp mouse velocity to [-MAX_VEL, MAX_VEL]
+    dx = Math.max(-MAX_VEL, Math.min(MAX_VEL, dx));
+    dy = Math.max(-MAX_VEL, Math.min(MAX_VEL, dy));
+
+    // Use Bresenham's line algorithm to step through all cells along the drag path
+    let x0 = lastFrameMouseX;
+    let y0 = lastFrameMouseY;
+    const x1 = currentMouseX;
+    const y1 = currentMouseY;
+
+    const dxAbs = Math.abs(x1 - x0);
+    const dyAbs = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dxAbs - dyAbs;
+
+    const hasVelocity = Math.abs(dx) > 0.0001 || Math.abs(dy) > 0.0001;
+
+    while (true) {
+        if (x0 >= 0 && x0 < GRID_WIDTH && y0 >= 0 && y0 < GRID_HEIGHT) {
+            // Apply density and velocity with distance-based brush falloff
+            for (let rY = -1; rY <= 1; rY++) {
+                for (let rX = -1; rX <= 1; rX++) {
+                    const cx = x0 + rX;
+                    const cy = y0 + rY;
+                    if (cx >= 1 && cx < GRID_WIDTH - 1 && cy >= 1 && cy < GRID_HEIGHT - 1) {
+                        const idx = cy * GRID_WIDTH + cx;
+
+                        // Falloff factor: center=1.0, 4-neighbors=0.5, corners=0.25
+                        const distSq = rX * rX + rY * rY;
+                        const factor = distSq === 0 ? 1.0 : (distSq === 1 ? 0.5 : 0.25);
+
+                        device.queue.writeBuffer(densityFieldStorage[pingPongIndex], idx * 4, new Float32Array([1.0 * factor]));
+
+                        if (hasVelocity) {
+                            device.queue.writeBuffer(velocityFieldXStorage[pingPongIndex], idx * 4, new Float32Array([dx * factor]));
+                            device.queue.writeBuffer(velocityFieldYStorage[pingPongIndex], idx * 4, new Float32Array([dy * factor]));
+                        }
+                    }
+                }
+            }
+        }
+
+        if (x0 === x1 && y0 === y1) break;
+        const e2 = 2 * err;
+        if (e2 > -dyAbs) {
+            err -= dyAbs;
+            x0 += sx;
+        }
+        if (e2 < dxAbs) {
+            err += dxAbs;
+            y0 += sy;
+        }
+    }
+
+    lastFrameMouseX = currentMouseX;
+    lastFrameMouseY = currentMouseY;
+}
 
 
 // =========================================================
@@ -1669,6 +1749,9 @@ let pingPongIndex = 0;
 
 // Runs each frame (60 FPS via requestAnimationFrame)
 function frame() {
+    // 0. Apply frame-synchronized mouse input before compute passes
+    applyMouseInput();
+
     encoder = device.createCommandEncoder();
 
     // ===== Full Jos Stam Fluid Simulation Pipeline =====

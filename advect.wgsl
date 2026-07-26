@@ -30,9 +30,13 @@ fn csMain(@builtin(global_invocation_id) cell : vec3<u32>) {
     let velX : f32 = velFieldXIn[idx];
     let velY : f32 = velFieldYIn[idx];
 
-    // Backtrace through velocity field (semi-Lagrangian)
-    var originX : f32 = i - velX * dt * grid.x;
-    var originY : f32 = j - velY * dt * grid.x;
+    // Backtrace through velocity field (semi-Lagrangian) with displacement safety clamp
+    let maxDisp : f32 = grid.x * 0.15;
+    let dispX : f32 = clamp(velX * dt * grid.x, -maxDisp, maxDisp);
+    let dispY : f32 = clamp(velY * dt * grid.x, -maxDisp, maxDisp);
+
+    var originX : f32 = i - dispX;
+    var originY : f32 = j - dispY;
 
     // Clamp to grid interior bounds
     originX = clamp(originX, 0.5, grid.x - 1.5);
