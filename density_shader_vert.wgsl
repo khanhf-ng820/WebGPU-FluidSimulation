@@ -15,13 +15,13 @@ fn vsMain(@builtin(vertex_index) vertexIndex : u32,
     @builtin(instance_index) instance : u32) -> VertexOutput {
 
     var positions = array<vec2<f32>, 6>(
-        vec2<f32>(-0.8, -0.8),
-        vec2<f32>( 0.8, -0.8),
-        vec2<f32>(-0.8,  0.8),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
 
-        vec2<f32>(-0.8,  0.8),
-        vec2<f32>( 0.8, -0.8),
-        vec2<f32>( 0.8,  0.8)
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>( 1.0,  1.0)
     );
 
     var uvs = array<vec2<f32>, 6>(
